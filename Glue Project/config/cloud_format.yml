@@ -1,0 +1,114 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'CloudFormation template to create S3 bucket and Glue ETL job with access and logging'
+
+Resources:
+  # S3 Bucket
+  DataBucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: cfn-demo501
+
+  # IAM Role for Glue
+  GlueETLRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - glue.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: "/"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+      Policies:
+        - PolicyName: S3Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 's3:GetObject'
+                  - 's3:PutObject'
+                  - 's3:DeleteObject'
+                  - 's3:ListBucket'
+                Resource:
+                  - !Sub 'arn:aws:s3:::${DataBucket}'
+                  - !Sub 'arn:aws:s3:::${DataBucket}/*'
+                  - 'arn:aws:s3:::clf-glu-demo501'
+                  - 'arn:aws:s3:::clf-glu-demo501/*'
+        - PolicyName: CloudWatchLogsAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                  - 'logs:AssociateKmsKey'
+                Resource: 
+                  - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws-glue/jobs/*'
+                  - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws-glue/jobs/*:log-stream:*'
+
+  # Glue ETL Job
+  GlueETLJob:
+    Type: 'AWS::Glue::Job'
+    Properties:
+      Name: !Sub '${AWS::StackName}-etl-job'
+      Description: 'Glue ETL Job with S3 access and logging'
+      Role: !GetAtt GlueETLRole.Arn
+      Command:
+        Name: glueetl
+        ScriptLocation: 's3://clf-glu-demo501/scripts/main.py'
+      DefaultArguments:
+        '--job-language': 'python'
+        '--job-bookmark-option': 'job-bookmark-enable'
+        '--enable-continuous-cloudwatch-log': 'true'
+        '--enable-glue-datacatalog': 'true'
+        '--continuous-log-logGroup': !Sub '/aws-glue/jobs/${AWS::StackName}-etl-job'
+        '--enable-metrics': 'true'
+      GlueVersion: '3.0'
+      MaxRetries: 0
+      Timeout: 2880
+      NumberOfWorkers: 2
+      WorkerType: 'G.1X'
+      LogUri: !Sub 's3://${DataBucket}/glue-logs/'
+
+  # S3 Bucket Policy
+  DataBucketPolicy:
+    Type: 'AWS::S3::BucketPolicy'
+    Properties:
+      Bucket: !Ref DataBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowGlueReadWrite
+            Effect: Allow
+            Principal:
+              AWS: !GetAtt GlueETLRole.Arn
+            Action:
+              - 's3:GetObject'
+              - 's3:PutObject'
+              - 's3:DeleteObject'
+              - 's3:ListBucket'
+            Resource:
+              - !GetAtt DataBucket.Arn
+              - !Join ['', [!GetAtt DataBucket.Arn, '/*']]
+
+Outputs:
+  S3BucketName:
+    Description: 'Name of the created S3 bucket'
+    Value: !Ref DataBucket
+  GlueJobName:
+    Description: 'Name of the created Glue ETL job'
+    Value: !Ref GlueETLJob
+  GlueRoleARN:
+    Description: 'ARN of the IAM role for Glue'
+    Value: !GetAtt GlueETLRole.Arn
+  GlueJobLogGroupName:
+    Description: 'Name of the CloudWatch Log Group for Glue Job'
+    Value: !Sub '/aws-glue/jobs/${AWS::StackName}-etl-job'
